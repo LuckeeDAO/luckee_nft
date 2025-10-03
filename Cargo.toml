@@ -1,0 +1,24 @@
+[package]
+name = "luckee_nft"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cosmwasm-std = { version = "2.2.2", features = ["iterator"] }
+cosmwasm-schema = "2.2.2"
+cw-storage-plus = "2.2.2"
+cw721-base = "0.18"
+cw721 = "0.18"
+cw-utils = "3.2.0"
+schemars = "0.8"
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+cw2 = "2.0"
+thiserror = "1.0"
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+cw-multi-test = "0.18"
