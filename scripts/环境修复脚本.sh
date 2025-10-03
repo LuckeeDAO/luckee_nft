@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# GVM_DEBUG 问题修复脚本
-# 在 .bashrc 中添加 GVM_DEBUG 初始化
+# Luckee NFT 项目环境修复脚本
+# 修复 GVM_DEBUG 环境变量问题
 
 echo "🔧 开始修复 GVM_DEBUG 问题..."
 
