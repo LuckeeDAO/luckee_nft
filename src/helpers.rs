@@ -104,7 +104,8 @@ pub fn validate_synthesis_inputs(
         return Err(ContractError::InsufficientInputTokens {});
     }
 
-    // 验证每个输入 NFT 存在且属于发送者
+    // 预先加载所有输入NFT的元数据，避免重复读取
+    let mut input_metas = alloc::collections::BTreeMap::new();
     for token_id in inputs {
         let meta = TOKEN_META.may_load(deps.storage, *token_id)?;
         if meta.is_none() {
@@ -115,17 +116,20 @@ pub fn validate_synthesis_inputs(
         if !verify_nft_ownership(deps, *token_id, sender)? {
             return Err(ContractError::NotOwned {});
         }
+        
+        // 缓存元数据供后续使用
+        if let Some(meta) = meta {
+            input_metas.insert(*token_id, meta);
+        }
     }
 
-    // 验证配方要求
+    // 验证配方要求（使用缓存的元数据）
     for recipe_input in &recipe.inputs {
         let count = inputs.iter()
             .filter(|&&token_id| {
-                if let Ok(Some(meta)) = TOKEN_META.may_load(deps.storage, token_id) {
-                    meta.kind == recipe_input.nft_kind
-                } else {
-                    false
-                }
+                input_metas.get(&token_id)
+                    .map(|meta| meta.kind == recipe_input.nft_kind)
+                    .unwrap_or(false)
             })
             .count();
 
@@ -134,6 +138,64 @@ pub fn validate_synthesis_inputs(
         }
     }
 
+    Ok(())
+}
+
+// ========== 数据验证函数 ==========
+
+/// 验证系列ID格式
+/// 
+/// 检查系列ID是否符合格式要求
+/// 
+/// # 参数
+/// - `series_id`: 要验证的系列ID
+/// 
+/// # 返回值
+/// - `Result<(), ContractError>`: 验证结果
+pub fn validate_series_id(series_id: &str) -> Result<(), ContractError> {
+    // 检查是否为空
+    if series_id.is_empty() {
+        return Err(ContractError::Std(cosmwasm_std::StdError::generic_err("Series ID cannot be empty")));
+    }
+    
+    // 检查长度限制（避免过长的ID）
+    if series_id.len() > 100 {
+        return Err(ContractError::Std(cosmwasm_std::StdError::generic_err("Series ID too long")));
+    }
+    
+    // 检查字符集（只允许字母、数字、下划线、连字符）
+    if !series_id.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        return Err(ContractError::Std(cosmwasm_std::StdError::generic_err("Series ID contains invalid characters")));
+    }
+    
+    Ok(())
+}
+
+/// 验证集合组ID格式
+/// 
+/// 检查集合组ID是否符合格式要求
+/// 
+/// # 参数
+/// - `group_id`: 要验证的集合组ID
+/// 
+/// # 返回值
+/// - `Result<(), ContractError>`: 验证结果
+pub fn validate_collection_group_id(group_id: &str) -> Result<(), ContractError> {
+    // 检查是否为空
+    if group_id.is_empty() {
+        return Err(ContractError::Std(cosmwasm_std::StdError::generic_err("Collection group ID cannot be empty")));
+    }
+    
+    // 检查长度限制
+    if group_id.len() > 100 {
+        return Err(ContractError::Std(cosmwasm_std::StdError::generic_err("Collection group ID too long")));
+    }
+    
+    // 检查字符集
+    if !group_id.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        return Err(ContractError::Std(cosmwasm_std::StdError::generic_err("Collection group ID contains invalid characters")));
+    }
+    
     Ok(())
 }
 

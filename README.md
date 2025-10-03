@@ -15,15 +15,33 @@
 
 ```
 luckee_nft/
-├── contracts/
-│   ├── nft/              # 主NFT合约
-│   └── factory/          # NFT工厂合约（可选）
-├── packages/
-│   ├── types/            # 共享类型定义
-│   └── utils/            # 工具函数
-├── docs/                 # 设计文档
-├── scripts/              # 部署脚本
-└── tests/                # 测试用例
+├── src/                  # 源代码
+│   ├── contract.rs       # 合约入口点
+│   ├── cw721.rs         # CW721 接口实现
+│   ├── luckee.rs        # Luckee 扩展功能
+│   ├── admin.rs         # 管理员功能
+│   ├── events.rs        # 事件处理
+│   ├── helpers.rs       # 辅助函数
+│   ├── recipes.rs       # 配方管理
+│   ├── state.rs         # 状态管理
+│   ├── types.rs         # 类型定义
+│   ├── msg.rs           # 消息定义
+│   ├── error.rs         # 错误定义
+│   └── lib.rs           # 库入口
+├── tests/                # 测试文件
+│   ├── comprehensive_tests.rs
+│   ├── integration.rs
+│   ├── security_tests.rs
+│   ├── boundary_tests.rs
+│   └── no_std_integration_tests.rs
+├── docs/                 # 项目文档
+├── scripts/              # 脚本文件
+├── examples/             # 示例代码
+│   └── nodejs/          # Node.js 集成示例
+├── .github/              # GitHub 配置
+│   └── workflows/       # CI/CD 工作流
+├── Cargo.toml           # 项目配置
+└── README.md            # 项目说明
 ```
 
 ## 快速开始
@@ -55,7 +73,10 @@ export ADMIN_ADDRESS="your_admin_address"
 export MINTER_ADDRESS="blind_box_contract_address"
 
 # 运行部署脚本
-./scripts/deploy.sh
+./scripts/deploy.sh --admin $ADMIN_ADDRESS --minter $MINTER_ADDRESS
+
+# 或者使用干运行模式预览部署
+./scripts/deploy.sh --admin $ADMIN_ADDRESS --minter $MINTER_ADDRESS --dry-run
 ```
 
 ## NFT 类型与稀有度
@@ -266,8 +287,12 @@ cargo test test_synthesis
 ## 文档
 
 - [合约设计文档](docs/合约设计.md)
+- [项目文档](docs/项目文档.md)
 - [API接口文档](docs/接口文档.md)
 - [部署指南](docs/部署指南.md)
+- [安全与运维](docs/安全与运维.md)
+- [事件监听指南](docs/事件监听指南.md)
+- [no_std部署测试报告](docs/no_std部署测试报告.md)
 
 ## 许可证
 

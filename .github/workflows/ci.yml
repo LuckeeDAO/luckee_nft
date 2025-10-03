@@ -1,0 +1,353 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # 代码格式检查
+  fmt:
+    name: Code Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+  # 代码质量检查
+  clippy:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # 构建和测试矩阵
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          # 标准构建和测试
+          - name: std
+            features: std
+            test-command: cargo test --features std
+          # no_std 构建和测试
+          - name: no_std
+            features: cosmwasm
+            test-command: cargo test --no-default-features --features cosmwasm
+          # 全功能测试
+          - name: all_features
+            features: std,cosmwasm
+            test-command: cargo test --all-features
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          override: true
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check compilation
+        run: cargo check --no-default-features --features ${{ matrix.features }}
+
+      - name: Build release
+        run: |
+          RUSTFLAGS='-C link-arg=-s' cargo build --release \
+            --target wasm32-unknown-unknown \
+            --no-default-features \
+            --features ${{ matrix.features }}
+
+      - name: Run tests
+        run: ${{ matrix.test-command }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: wasm-${{ matrix.name }}
+          path: target/wasm32-unknown-unknown/release/luckee_nft.wasm
+          retention-days: 7
+
+  # WASM 优化
+  optimize:
+    name: WASM Optimization
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build optimized WASM
+        run: |
+          RUSTFLAGS='-C link-arg=-s' cargo build --release \
+            --target wasm32-unknown-unknown \
+            --no-default-features \
+            --features cosmwasm
+
+      - name: Install wasm-opt
+        run: |
+          wget https://github.com/WebAssembly/binaryen/releases/download/version_116/binaryen-version_116-x86_64-linux.tar.gz
+          tar -xzf binaryen-version_116-x86_64-linux.tar.gz
+          sudo cp binaryen-version_116/bin/wasm-opt /usr/local/bin/
+
+      - name: Optimize WASM
+        run: |
+          wasm-opt -Os target/wasm32-unknown-unknown/release/luckee_nft.wasm \
+            -o target/wasm32-unknown-unknown/release/luckee_nft_optimized.wasm
+
+      - name: Check WASM size
+        run: |
+          echo "Original size:"
+          ls -lh target/wasm32-unknown-unknown/release/luckee_nft.wasm
+          echo "Optimized size:"
+          ls -lh target/wasm32-unknown-unknown/release/luckee_nft_optimized.wasm
+
+      - name: Generate checksums
+        run: |
+          sha256sum target/wasm32-unknown-unknown/release/luckee_nft.wasm > checksums.txt
+          sha256sum target/wasm32-unknown-unknown/release/luckee_nft_optimized.wasm >> checksums.txt
+          cat checksums.txt
+
+      - name: Upload optimized WASM
+        uses: actions/upload-artifact@v3
+        with:
+          name: wasm-optimized
+          path: |
+            target/wasm32-unknown-unknown/release/luckee_nft_optimized.wasm
+            checksums.txt
+          retention-days: 30
+
+  # 安全扫描
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+          override: true
+
+      - name: Run security audit
+        run: |
+          cargo install cargo-audit
+          cargo audit
+
+      - name: Run clippy security checks
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  # 文档生成
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Generate documentation
+        run: |
+          cargo doc --no-deps --features std --document-private-items
+
+      - name: Upload documentation
+        uses: actions/upload-artifact@v3
+        with:
+          name: documentation
+          path: target/doc/
+          retention-days: 7
+
+  # 集成测试
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Add wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run integration tests
+        run: |
+          cargo test --test integration --features cosmwasm
+
+      - name: Run comprehensive tests
+        run: |
+          cargo test --test comprehensive_tests --features cosmwasm
+
+      - name: Run security tests
+        run: |
+          cargo test --test security_tests --features cosmwasm
+
+  # 发布准备
+  release-prep:
+    name: Release Preparation
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy, build-and-test, optimize, security, integration]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download optimized WASM
+        uses: actions/download-artifact@v3
+        with:
+          name: wasm-optimized
+          path: artifacts/
+
+      - name: Create release info
+        run: |
+          echo "## Build Information" > release-info.md
+          echo "- **Commit**: ${{ github.sha }}" >> release-info.md
+          echo "- **Branch**: ${{ github.ref_name }}" >> release-info.md
+          echo "- **Build Date**: $(date -u)" >> release-info.md
+          echo "" >> release-info.md
+          echo "## WASM Files" >> release-info.md
+          echo "- **Optimized WASM**: luckee_nft_optimized.wasm" >> release-info.md
+          echo "" >> release-info.md
+          echo "## Checksums" >> release-info.md
+          cat artifacts/checksums.txt >> release-info.md
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: release-artifacts
+          path: |
+            artifacts/luckee_nft_optimized.wasm
+            release-info.md
+          retention-days: 90
+
+  # 通知
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    needs: [fmt, clippy, build-and-test, optimize, security, integration]
+    if: always()
+    steps:
+      - name: Notify success
+        if: ${{ needs.fmt.result == 'success' && needs.clippy.result == 'success' && needs.build-and-test.result == 'success' && needs.optimize.result == 'success' && needs.security.result == 'success' && needs.integration.result == 'success' }}
+        run: |
+          echo "✅ All CI checks passed successfully!"
+          echo "Build completed for commit: ${{ github.sha }}"
+
+      - name: Notify failure
+        if: ${{ needs.fmt.result == 'failure' || needs.clippy.result == 'failure' || needs.build-and-test.result == 'failure' || needs.optimize.result == 'failure' || needs.security.result == 'failure' || needs.integration.result == 'failure' }}
+        run: |
+          echo "❌ CI checks failed!"
+          echo "Failed jobs:"
+          echo "- fmt: ${{ needs.fmt.result }}"
+          echo "- clippy: ${{ needs.clippy.result }}"
+          echo "- build-and-test: ${{ needs.build-and-test.result }}"
+          echo "- optimize: ${{ needs.optimize.result }}"
+          echo "- security: ${{ needs.security.result }}"
+          echo "- integration: ${{ needs.integration.result }}"
+          exit 1

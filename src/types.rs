@@ -7,7 +7,22 @@
 //! - 合成配方相关结构
 //! - 各种请求和响应结构
 
+#[cfg(feature = "std")]
 use cosmwasm_schema::cw_serde;
+
+#[cfg(not(feature = "std"))]
+use serde::{Deserialize, Serialize};
+
+#[cfg(not(feature = "std"))]
+macro_rules! cw_serde {
+    ($($item:item)*) => {
+        $(
+            #[derive(Serialize, Deserialize)]
+            #[serde(rename_all = "snake_case")]
+            $item
+        )*
+    };
+}
 
 // ========== NFT 类型定义 ==========
 
@@ -108,7 +123,7 @@ impl NftKind {
     /// # 返回值
     /// - `String`: 对应的字符串键
     pub fn to_key(&self) -> String {
-        format!("{:?}", self)
+        alloc::format!("{:?}", self)
     }
     
     /// 从字符串键转换为 NftKind
@@ -131,7 +146,7 @@ impl NftKind {
             "Polaris" => Ok(NftKind::Polaris),
             "WheelOfDestiny" => Ok(NftKind::WheelOfDestiny),
             "Genesis" => Ok(NftKind::Genesis),
-            _ => Err(cosmwasm_std::StdError::generic_err(format!("Unknown NftKind: {}", key)))
+            _ => Err(cosmwasm_std::StdError::generic_err(alloc::format!("Unknown NftKind: {}", key)))
         }
     }
 }

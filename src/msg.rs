@@ -6,7 +6,27 @@
 //! - 查询消息 (QueryMsg)
 //! - 各种响应类型
 
+#[cfg(feature = "std")]
 use cosmwasm_schema::{cw_serde, QueryResponses};
+
+#[cfg(not(feature = "std"))]
+use serde::{Deserialize, Serialize};
+
+#[cfg(not(feature = "std"))]
+macro_rules! cw_serde {
+    ($($item:item)*) => {
+        $(
+            #[derive(Serialize, Deserialize)]
+            #[serde(rename_all = "snake_case")]
+            $item
+        )*
+    };
+}
+
+#[cfg(not(feature = "std"))]
+macro_rules! QueryResponses {
+    () => {};
+}
 use crate::types::{NftKind, NftMeta, Recipe, RecipeInput};
 use crate::state::Expiration;
 

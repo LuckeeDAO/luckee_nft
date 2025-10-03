@@ -13,7 +13,7 @@ use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use crate::state::{
     Config, CONFIG, TOTAL_SUPPLY, STORAGE_VERSION, CONTRACT_PAUSED,
-    CONTRACT_INFO, ContractInfo, TOKEN_META,
+    CONTRACT_INFO, ContractInfo, TOKEN_META, NEXT_TOKEN_ID,
 };
 
 // 导入各个功能模块
@@ -61,6 +61,7 @@ pub fn instantiate(
     // 保存配置和初始状态
     CONFIG.save(deps.storage, &config)?;
     TOTAL_SUPPLY.save(deps.storage, &0u64)?;
+    NEXT_TOKEN_ID.save(deps.storage, &1u64)?;
     
     // 初始化存储版本
     STORAGE_VERSION.save(deps.storage, &CONTRACT_VERSION.to_string())?;

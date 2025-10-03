@@ -805,3 +805,445 @@ fn test_comprehensive_checked_arithmetic() {
         .unwrap();
     assert_eq!(res.tokens.len(), 0);
 }
+
+#[test]
+fn test_batch_mint_comprehensive() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(contract());
+    
+    // 部署NFT合约
+    let nft_contract_addr = app.instantiate_contract(
+        contract_id,
+        Addr::unchecked("creator"),
+        &InstantiateMsg {
+            name: "Luckee NFT".to_string(),
+            symbol: "LUCKEE".to_string(),
+            minter: "minter".to_string(),
+            base_uri: Some("https://luckee.io/metadata/".to_string()),
+        },
+        &[],
+        "Luckee NFT",
+        None,
+    ).unwrap();
+
+    // 测试1: 正常批量铸造
+    let batch_mints = vec![
+        luckee_nft::msg::BatchMintItem {
+            token_id: 1,
+            owner: "user1".to_string(),
+            extension: NftMeta {
+                kind: NftKind::Common,
+                scale_origin: Scale::Tiny,
+                physical_sku: None,
+                crafted_from: None,
+                series_id: "test_series".to_string(),
+                collection_group_id: None,
+                serial_in_series: 1,
+            },
+        },
+        luckee_nft::msg::BatchMintItem {
+            token_id: 2,
+            owner: "user2".to_string(),
+            extension: NftMeta {
+                kind: NftKind::Common,
+                scale_origin: Scale::Tiny,
+                physical_sku: None,
+                crafted_from: None,
+                series_id: "test_series".to_string(),
+                collection_group_id: None,
+                serial_in_series: 2,
+            },
+        },
+    ];
+
+    let batch_mint_msg = ExecuteMsg::BatchMint { mints: batch_mints };
+    let res = app.execute_contract(
+        Addr::unchecked("minter"),
+        nft_contract_addr.clone(),
+        &batch_mint_msg,
+        &[],
+    );
+    assert!(res.is_ok());
+
+    // 验证NFT已铸造
+    let owner_query = QueryMsg::OwnerOf { 
+        token_id: 1, 
+        include_expired: None 
+    };
+    let res: luckee_nft::msg::OwnerOfResponse = app.wrap()
+        .query_wasm_smart(nft_contract_addr.clone(), &owner_query)
+        .unwrap();
+    assert_eq!(res.owner, "user1");
+
+    // 测试2: 重复token_id应该失败
+    let duplicate_batch = vec![
+        luckee_nft::msg::BatchMintItem {
+            token_id: 1, // 重复ID
+            owner: "user3".to_string(),
+            extension: NftMeta {
+                kind: NftKind::Common,
+                scale_origin: Scale::Tiny,
+                physical_sku: None,
+                crafted_from: None,
+                series_id: "test_series2".to_string(),
+                collection_group_id: None,
+                serial_in_series: 1,
+            },
+        },
+    ];
+
+    let duplicate_msg = ExecuteMsg::BatchMint { mints: duplicate_batch };
+    let res = app.execute_contract(
+        Addr::unchecked("minter"),
+        nft_contract_addr.clone(),
+        &duplicate_msg,
+        &[],
+    );
+    assert!(res.is_err());
+
+    // 测试3: 超大批次应该失败
+    let large_batch: Vec<luckee_nft::msg::BatchMintItem> = (3..=103) // 101个元素，超过限制
+        .map(|i| luckee_nft::msg::BatchMintItem {
+            token_id: i,
+            owner: format!("user{}", i),
+            extension: NftMeta {
+                kind: NftKind::Common,
+                scale_origin: Scale::Tiny,
+                physical_sku: None,
+                crafted_from: None,
+                series_id: format!("series{}", i),
+                collection_group_id: None,
+                serial_in_series: 1,
+            },
+        })
+        .collect();
+
+    let large_msg = ExecuteMsg::BatchMint { mints: large_batch };
+    let res = app.execute_contract(
+        Addr::unchecked("minter"),
+        nft_contract_addr.clone(),
+        &large_msg,
+        &[],
+    );
+    assert!(res.is_err());
+
+    // 测试4: 无效系列ID应该失败
+    let invalid_series_batch = vec![
+        luckee_nft::msg::BatchMintItem {
+            token_id: 3,
+            owner: "user3".to_string(),
+            extension: NftMeta {
+                kind: NftKind::Common,
+                scale_origin: Scale::Tiny,
+                physical_sku: None,
+                crafted_from: None,
+                series_id: "".to_string(), // 空系列ID
+                collection_group_id: None,
+                serial_in_series: 1,
+            },
+        },
+    ];
+
+    let invalid_msg = ExecuteMsg::BatchMint { mints: invalid_series_batch };
+    let res = app.execute_contract(
+        Addr::unchecked("minter"),
+        nft_contract_addr.clone(),
+        &invalid_msg,
+        &[],
+    );
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_synthesize_comprehensive() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(contract());
+    
+    // 部署NFT合约
+    let nft_contract_addr = app.instantiate_contract(
+        contract_id,
+        Addr::unchecked("creator"),
+        &InstantiateMsg {
+            name: "Luckee NFT".to_string(),
+            symbol: "LUCKEE".to_string(),
+            minter: "minter".to_string(),
+            base_uri: Some("https://luckee.io/metadata/".to_string()),
+        },
+        &[],
+        "Luckee NFT",
+        None,
+    ).unwrap();
+
+    // 设置合成配方
+    let recipe = luckee_nft::types::Recipe {
+        inputs: vec![
+            luckee_nft::types::RecipeInput {
+                nft_kind: NftKind::Common,
+                count: 2,
+            },
+        ],
+        cost: None,
+    };
+
+    let set_recipe_msg = ExecuteMsg::SetRecipe {
+        target: NftKind::Rare,
+        recipe: recipe.clone(),
+    };
+    let res = app.execute_contract(
+        Addr::unchecked("creator"),
+        nft_contract_addr.clone(),
+        &set_recipe_msg,
+        &[],
+    );
+    assert!(res.is_ok());
+
+    // 铸造输入NFT
+    let mint_msg1 = ExecuteMsg::Mint {
+        token_id: 1,
+        owner: "user1".to_string(),
+        extension: NftMeta {
+            kind: NftKind::Common,
+            scale_origin: Scale::Tiny,
+            physical_sku: None,
+            crafted_from: None,
+            series_id: "input_series".to_string(),
+            collection_group_id: None,
+            serial_in_series: 1,
+        },
+    };
+    let res = app.execute_contract(
+        Addr::unchecked("minter"),
+        nft_contract_addr.clone(),
+        &mint_msg1,
+        &[],
+    );
+    assert!(res.is_ok());
+
+    let mint_msg2 = ExecuteMsg::Mint {
+        token_id: 2,
+        owner: "user1".to_string(),
+        extension: NftMeta {
+            kind: NftKind::Common,
+            scale_origin: Scale::Tiny,
+            physical_sku: None,
+            crafted_from: None,
+            series_id: "input_series".to_string(),
+            collection_group_id: None,
+            serial_in_series: 2,
+        },
+    };
+    let res = app.execute_contract(
+        Addr::unchecked("minter"),
+        nft_contract_addr.clone(),
+        &mint_msg2,
+        &[],
+    );
+    assert!(res.is_ok());
+
+    // 测试1: 正常合成
+    let synthesize_msg = ExecuteMsg::Synthesize {
+        inputs: vec![1, 2],
+        target: NftKind::Rare,
+    };
+    let res = app.execute_contract(
+        Addr::unchecked("user1"),
+        nft_contract_addr.clone(),
+        &synthesize_msg,
+        &[],
+    );
+    assert!(res.is_ok());
+
+    // 验证输入NFT已被销毁
+    let owner_query = QueryMsg::OwnerOf { 
+        token_id: 1, 
+        include_expired: None 
+    };
+    let res: Result<luckee_nft::msg::OwnerOfResponse, _> = app.wrap()
+        .query_wasm_smart(nft_contract_addr.clone(), &owner_query);
+    assert!(res.is_err()); // 应该找不到
+
+    // 验证输出NFT已创建（使用NEXT_TOKEN_ID=1）
+    let owner_query = QueryMsg::OwnerOf { 
+        token_id: 1, // 合成生成的NFT ID
+        include_expired: None 
+    };
+    let res: luckee_nft::msg::OwnerOfResponse = app.wrap()
+        .query_wasm_smart(nft_contract_addr.clone(), &owner_query)
+        .unwrap();
+    assert_eq!(res.owner, "user1");
+
+    // 测试2: 输入不足应该失败
+    let mint_msg3 = ExecuteMsg::Mint {
+        token_id: 3,
+        owner: "user2".to_string(),
+        extension: NftMeta {
+            kind: NftKind::Common,
+            scale_origin: Scale::Tiny,
+            physical_sku: None,
+            crafted_from: None,
+            series_id: "input_series2".to_string(),
+            collection_group_id: None,
+            serial_in_series: 1,
+        },
+    };
+    let res = app.execute_contract(
+        Addr::unchecked("minter"),
+        nft_contract_addr.clone(),
+        &mint_msg3,
+        &[],
+    );
+    assert!(res.is_ok());
+
+    let insufficient_msg = ExecuteMsg::Synthesize {
+        inputs: vec![3], // 只有1个，需要2个
+        target: NftKind::Rare,
+    };
+    let res = app.execute_contract(
+        Addr::unchecked("user2"),
+        nft_contract_addr.clone(),
+        &insufficient_msg,
+        &[],
+    );
+    assert!(res.is_err());
+
+    // 测试3: 非所有者尝试合成应该失败
+    let non_owner_msg = ExecuteMsg::Synthesize {
+        inputs: vec![3],
+        target: NftKind::Rare,
+    };
+    let res = app.execute_contract(
+        Addr::unchecked("user1"), // 不是token 3的所有者
+        nft_contract_addr.clone(),
+        &non_owner_msg,
+        &[],
+    );
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_paused_state_operations() {
+    let mut app = mock_app();
+    let contract_id = app.store_code(contract());
+    
+    // 部署NFT合约
+    let nft_contract_addr = app.instantiate_contract(
+        contract_id,
+        Addr::unchecked("creator"),
+        &InstantiateMsg {
+            name: "Luckee NFT".to_string(),
+            symbol: "LUCKEE".to_string(),
+            minter: "minter".to_string(),
+            base_uri: Some("https://luckee.io/metadata/".to_string()),
+        },
+        &[],
+        "Luckee NFT",
+        None,
+    ).unwrap();
+
+    // 铸造一个NFT用于测试
+    let mint_msg = ExecuteMsg::Mint {
+        token_id: 1,
+        owner: "user1".to_string(),
+        extension: NftMeta {
+            kind: NftKind::Common,
+            scale_origin: Scale::Tiny,
+            physical_sku: None,
+            crafted_from: None,
+            series_id: "test_series".to_string(),
+            collection_group_id: None,
+            serial_in_series: 1,
+        },
+    };
+    let res = app.execute_contract(
+        Addr::unchecked("minter"),
+        nft_contract_addr.clone(),
+        &mint_msg,
+        &[],
+    );
+    assert!(res.is_ok());
+
+    // 暂停合约
+    let pause_msg = ExecuteMsg::Pause {};
+    let res = app.execute_contract(
+        Addr::unchecked("creator"),
+        nft_contract_addr.clone(),
+        &pause_msg,
+        &[],
+    );
+    assert!(res.is_ok());
+
+    // 测试暂停状态下操作应该失败
+    let mint_msg2 = ExecuteMsg::Mint {
+        token_id: 2,
+        owner: "user2".to_string(),
+        extension: NftMeta {
+            kind: NftKind::Common,
+            scale_origin: Scale::Tiny,
+            physical_sku: None,
+            crafted_from: None,
+            series_id: "test_series2".to_string(),
+            collection_group_id: None,
+            serial_in_series: 1,
+        },
+    };
+    let res = app.execute_contract(
+        Addr::unchecked("minter"),
+        nft_contract_addr.clone(),
+        &mint_msg2,
+        &[],
+    );
+    assert!(res.is_err());
+
+    let transfer_msg = ExecuteMsg::TransferNft {
+        recipient: "user2".to_string(),
+        token_id: 1,
+    };
+    let res = app.execute_contract(
+        Addr::unchecked("user1"),
+        nft_contract_addr.clone(),
+        &transfer_msg,
+        &[],
+    );
+    assert!(res.is_err());
+
+    let burn_msg = ExecuteMsg::Burn { token_id: 1 };
+    let res = app.execute_contract(
+        Addr::unchecked("user1"),
+        nft_contract_addr.clone(),
+        &burn_msg,
+        &[],
+    );
+    assert!(res.is_err());
+
+    // 恢复合约
+    let unpause_msg = ExecuteMsg::Unpause {};
+    let res = app.execute_contract(
+        Addr::unchecked("creator"),
+        nft_contract_addr.clone(),
+        &unpause_msg,
+        &[],
+    );
+    assert!(res.is_ok());
+
+    // 验证操作恢复正常
+    let mint_msg3 = ExecuteMsg::Mint {
+        token_id: 3,
+        owner: "user3".to_string(),
+        extension: NftMeta {
+            kind: NftKind::Common,
+            scale_origin: Scale::Tiny,
+            physical_sku: None,
+            crafted_from: None,
+            series_id: "test_series3".to_string(),
+            collection_group_id: None,
+            serial_in_series: 1,
+        },
+    };
+    let res = app.execute_contract(
+        Addr::unchecked("minter"),
+        nft_contract_addr.clone(),
+        &mint_msg3,
+        &[],
+    );
+    assert!(res.is_ok());
+}

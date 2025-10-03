@@ -7,24 +7,29 @@
 //! - 批量操作
 //! - 扩展查询功能
 
+#[cfg(feature = "cosmwasm")]
 use cosmwasm_std::{
     to_json_binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult,
     Binary, Order,
 };
+#[cfg(feature = "cosmwasm")]
 use cw_storage_plus::Bound;
 
 use crate::error::ContractError;
+#[cfg(feature = "cosmwasm")]
 use crate::state::{
     TOKEN_META, TOKEN_OWNERSHIP, SERIES_NEXT_SERIAL, TOTAL_SUPPLY, RECIPES, 
-    SYNTHESIS_HISTORY, SynthesisRecord, ALL_TOKENS
+    SYNTHESIS_HISTORY, SynthesisRecord, ALL_TOKENS, NEXT_TOKEN_ID
 };
 use crate::types::{NftKind, NftMeta, Recipe, Scale};
 use crate::msg::{BatchMintItem, TokensByKindResponse, TokensBySeriesResponse, 
                 TokensByGroupResponse, LuckeeContractInfoResponse, AllRecipesResponse, 
                 SynthesisPreviewResponse, NftContractResponse};
+#[cfg(feature = "cosmwasm")]
 use crate::helpers::{check_contract_paused, is_authorized_minter, validate_synthesis_inputs, 
-                    add_token_to_owner};
-use crate::events::{emit_mint_event, emit_burn_event};
+                    add_token_to_owner, validate_series_id, validate_collection_group_id};
+#[cfg(feature = "cosmwasm")]
+use crate::events::{emit_mint_event, emit_burn_event, emit_synthesize_event, emit_batch_mint_event};
 
 // ========== 常量定义 ==========
 
@@ -51,6 +56,7 @@ const MAX_BATCH_MINT: usize = 100;
 /// 
 /// # 返回值
 /// - `Result<Response, ContractError>`: 铸造结果
+#[cfg(feature = "cosmwasm")]
 pub fn execute_mint(
     deps: DepsMut,
     info: MessageInfo,
@@ -72,9 +78,23 @@ pub fn execute_mint(
     // 验证所有者地址格式
     let owner_addr = deps.api.addr_validate(&owner)?;
 
+    // 验证系列ID格式
+    validate_series_id(&extension.series_id)?;
+    
+    // 验证集合组ID格式（如果提供）
+    if let Some(ref group_id) = extension.collection_group_id {
+        validate_collection_group_id(group_id)?;
+    }
+
     // 检查 NFT 是否已存在
     if TOKEN_META.has(deps.storage, token_id) {
         return Err(ContractError::TokenAlreadyExists {});
+    }
+
+    // 更新NEXT_TOKEN_ID计数器，确保后续生成的ID不会冲突
+    let current_next_id = NEXT_TOKEN_ID.load(deps.storage)?;
+    if token_id >= current_next_id {
+        NEXT_TOKEN_ID.save(deps.storage, &(token_id.checked_add(1).ok_or(ContractError::Overflow {})?))?;
     }
 
     // ========== 本地 CW721 模式 ==========
@@ -104,8 +124,8 @@ pub fn execute_mint(
         .add_attribute("action", "mint")
         .add_attribute("token_id", token_id.to_string())
         .add_attribute("owner", owner)
-        .add_attribute("kind", format!("{:?}", extension.kind))
-        .add_event(emit_mint_event(token_id, &owner_str, &format!("{:?}", extension.kind))))
+        .add_attribute("kind", alloc::format!("{:?}", extension.kind))
+        .add_event(emit_mint_event(token_id, &owner_str, &alloc::format!("{:?}", extension.kind))))
 }
 
 /// 销毁 NFT
@@ -119,6 +139,7 @@ pub fn execute_mint(
 /// 
 /// # 返回值
 /// - `Result<Response, ContractError>`: 销毁结果
+#[cfg(feature = "cosmwasm")]
 pub fn execute_burn(
     deps: DepsMut,
     info: MessageInfo,
@@ -181,6 +202,7 @@ pub fn execute_burn(
 /// 
 /// # 返回值
 /// - `Result<Response, ContractError>`: 合成结果
+#[cfg(feature = "cosmwasm")]
 pub fn execute_synthesize(
     deps: DepsMut,
     env: Env,
@@ -203,9 +225,10 @@ pub fn execute_synthesize(
     // 验证输入 NFT 的所有权和有效性
     validate_synthesis_inputs(deps.as_ref(), &info.sender, &inputs, &recipe)?;
 
-    // 生成新的 token ID
-    let total_supply = TOTAL_SUPPLY.load(deps.storage)?;
-    let output_token_id = total_supply + 1;
+    // 生成新的 token ID（使用独立计数器确保唯一性）
+    let next_token_id = NEXT_TOKEN_ID.load(deps.storage)?;
+    let output_token_id = next_token_id;
+    NEXT_TOKEN_ID.save(deps.storage, &(next_token_id.checked_add(1).ok_or(ContractError::Overflow {})?))?;
 
     // 创建输出 NFT 的元数据
     let output_meta = NftMeta {
@@ -213,7 +236,7 @@ pub fn execute_synthesize(
         scale_origin: Scale::Tiny, // 合成获得的 NFT 使用默认规模
         physical_sku: None,
         crafted_from: Some(inputs.clone()), // 记录合成来源
-        series_id: format!("synthesis_{}", env.block.time.seconds()),
+        series_id: alloc::format!("synthesis_{}", env.block.time.seconds()),
         collection_group_id: None,
         serial_in_series: 1,
     };
@@ -251,7 +274,10 @@ pub fn execute_synthesize(
     SERIES_NEXT_SERIAL.save(deps.storage, output_meta.series_id.clone(), &new_serial)?;
     
     // 更新总供应量（输出 +1，输入 -inputs.len()）
-    let new_total_supply = total_supply + 1 - inputs.len() as u64;
+    // 注意：TOTAL_SUPPLY只表示当前存在的NFT数量，不用于ID生成
+    let new_total_supply = total_supply.checked_add(1)
+        .and_then(|supply| supply.checked_sub(inputs.len() as u64))
+        .ok_or(ContractError::Overflow {})?;
     TOTAL_SUPPLY.save(deps.storage, &new_total_supply)?;
 
     // 记录合成历史
@@ -266,9 +292,9 @@ pub fn execute_synthesize(
     Ok(Response::new()
         .add_attribute("action", "synthesize")
         .add_attribute("output_token_id", output_token_id.to_string())
-        .add_attribute("target", format!("{:?}", target))
+        .add_attribute("target", alloc::format!("{:?}", target))
         .add_attribute("inputs_count", inputs.len().to_string())
-        .add_event(emit_mint_event(output_token_id, &info.sender.to_string(), &format!("{:?}", target))))
+        .add_event(emit_synthesize_event(output_token_id, &alloc::format!("{:?}", target), inputs.len(), &info.sender)))
 }
 
 /// 设置合成配方
@@ -283,6 +309,7 @@ pub fn execute_synthesize(
 /// 
 /// # 返回值
 /// - `Result<Response, ContractError>`: 设置结果
+#[cfg(feature = "cosmwasm")]
 pub fn execute_set_recipe(
     deps: DepsMut,
     info: MessageInfo,
@@ -303,7 +330,7 @@ pub fn execute_set_recipe(
 
     Ok(Response::new()
         .add_attribute("action", "set_recipe")
-        .add_attribute("target", format!("{:?}", target)))
+        .add_attribute("target", alloc::format!("{:?}", target)))
 }
 
 /// 删除合成配方
@@ -336,10 +363,11 @@ pub fn execute_remove_recipe(
 
     Ok(Response::new()
         .add_attribute("action", "remove_recipe")
-        .add_attribute("target", format!("{:?}", target)))
+        .add_attribute("target", alloc::format!("{:?}", target)))
 }
 
 /// 批量铸造
+#[cfg(feature = "cosmwasm")]
 pub fn execute_batch_mint(
     deps: DepsMut,
     info: MessageInfo,
@@ -362,28 +390,76 @@ pub fn execute_batch_mint(
 
     let mint_count = mints.len();
     let mut total_supply = TOTAL_SUPPLY.load(deps.storage)?;
+    let mut response = Response::new()
+        .add_attribute("action", "batch_mint")
+        .add_attribute("count", mint_count.to_string());
 
-    for mint_item in mints {
-        // 检查token是否已存在
+    // 预先检查重复的token_id
+    let mut token_ids = alloc::collections::BTreeSet::new();
+    for mint_item in &mints {
+        if !token_ids.insert(mint_item.token_id) {
+            return Err(ContractError::TokenAlreadyExists {});
+        }
         if TOKEN_META.has(deps.storage, mint_item.token_id) {
             return Err(ContractError::TokenAlreadyExists {});
         }
+    }
 
+    for mint_item in mints {
+        // 校验所有者地址
+        let owner_addr = deps.api.addr_validate(&mint_item.owner)?;
+        
+        // 验证系列ID格式
+        validate_series_id(&mint_item.extension.series_id)?;
+        
+        // 验证集合组ID格式（如果提供）
+        if let Some(ref group_id) = mint_item.extension.collection_group_id {
+            validate_collection_group_id(group_id)?;
+        }
+        
+        // 更新NEXT_TOKEN_ID计数器，确保后续生成的ID不会冲突
+        let current_next_id = NEXT_TOKEN_ID.load(deps.storage)?;
+        if mint_item.token_id >= current_next_id {
+            NEXT_TOKEN_ID.save(deps.storage, &(mint_item.token_id.checked_add(1).ok_or(ContractError::Overflow {})?))?;
+        }
+        
         // 保存元数据
         TOKEN_META.save(deps.storage, mint_item.token_id, &mint_item.extension)?;
-
-        // 更新系列序号
+        
+        // 设置所有权
+        TOKEN_OWNERSHIP.save(deps.storage, mint_item.token_id, &owner_addr)?;
+        
+        // 更新所有者索引
+        add_token_to_owner(deps.storage, &owner_addr, mint_item.token_id)?;
+        
+        // 添加到全局索引
+        ALL_TOKENS.save(deps.storage, mint_item.token_id, &())?;
+        
+        // 更新系列序号（使用checked_add）
         let next_serial = SERIES_NEXT_SERIAL.may_load(deps.storage, mint_item.extension.series_id.clone())?.unwrap_or(0);
-        SERIES_NEXT_SERIAL.save(deps.storage, mint_item.extension.series_id.clone(), &(next_serial + 1))?;
-
+        let new_serial = next_serial.checked_add(1)
+            .ok_or(ContractError::Overflow {})?;
+        SERIES_NEXT_SERIAL.save(deps.storage, mint_item.extension.series_id.clone(), &new_serial)?;
+        
+        // 发出mint事件
+        response = response.add_event(emit_mint_event(
+            mint_item.token_id, 
+            &mint_item.owner, 
+            &alloc::format!("{:?}", mint_item.extension.kind)
+        ));
+        
         total_supply += 1;
     }
 
-    // 更新总供应量
-    TOTAL_SUPPLY.save(deps.storage, &total_supply)?;
-    Ok(Response::new()
-        .add_attribute("action", "batch_mint")
-        .add_attribute("count", mint_count.to_string()))
+    // 更新总供应量（使用checked_add）
+    let new_total_supply = total_supply.checked_add(mint_count as u64)
+        .ok_or(ContractError::Overflow {})?;
+    TOTAL_SUPPLY.save(deps.storage, &new_total_supply)?;
+    
+    // 发出批量铸造事件
+    response = response.add_event(emit_batch_mint_event(mint_count, &info.sender));
+    
+    Ok(response)
 }
 
 /// 设置铸造者权限
@@ -411,6 +487,7 @@ pub fn execute_set_minter(
 }
 
 // 查询函数实现
+#[cfg(feature = "cosmwasm")]
 pub fn query_tokens_by_kind(
     deps: Deps,
     kind: NftKind,
@@ -418,10 +495,12 @@ pub fn query_tokens_by_kind(
     limit: Option<u32>,
 ) -> StdResult<Binary> {
     let limit = limit.unwrap_or(30).min(30) as usize;
-    let start = start_after.unwrap_or(0);
+    
+    // 使用Bound实现标准分页逻辑
+    let start_bound = start_after.map(|id| Bound::exclusive(id));
 
     let tokens: Vec<u64> = TOKEN_META
-        .range(deps.storage, Some(Bound::exclusive(start + 1)), None, Order::Ascending)
+        .range(deps.storage, start_bound, None, Order::Ascending)
         .filter_map(|item| {
             item.ok().and_then(|(token_id, meta)| {
                 if meta.kind == kind {
@@ -437,6 +516,7 @@ pub fn query_tokens_by_kind(
     to_json_binary(&TokensByKindResponse { tokens })
 }
 
+#[cfg(feature = "cosmwasm")]
 pub fn query_tokens_by_series(
     deps: Deps,
     series_id: String,
@@ -444,10 +524,12 @@ pub fn query_tokens_by_series(
     limit: Option<u32>,
 ) -> StdResult<Binary> {
     let limit = limit.unwrap_or(30).min(30) as usize;
-    let start = start_after.unwrap_or(0);
+    
+    // 使用Bound实现标准分页逻辑
+    let start_bound = start_after.map(|id| Bound::exclusive(id));
 
     let tokens: Vec<u64> = TOKEN_META
-        .range(deps.storage, Some(Bound::exclusive(start + 1)), None, Order::Ascending)
+        .range(deps.storage, start_bound, None, Order::Ascending)
         .filter_map(|item| {
             item.ok().and_then(|(token_id, meta)| {
                 if meta.series_id == series_id {
@@ -463,6 +545,7 @@ pub fn query_tokens_by_series(
     to_json_binary(&TokensBySeriesResponse { tokens })
 }
 
+#[cfg(feature = "cosmwasm")]
 pub fn query_tokens_by_group(
     deps: Deps,
     group_id: String,
@@ -470,10 +553,12 @@ pub fn query_tokens_by_group(
     limit: Option<u32>,
 ) -> StdResult<Binary> {
     let limit = limit.unwrap_or(30).min(30) as usize;
-    let start = start_after.unwrap_or(0);
+    
+    // 使用Bound实现标准分页逻辑
+    let start_bound = start_after.map(|id| Bound::exclusive(id));
 
     let tokens: Vec<u64> = TOKEN_META
-        .range(deps.storage, Some(Bound::exclusive(start + 1)), None, Order::Ascending)
+        .range(deps.storage, start_bound, None, Order::Ascending)
         .filter_map(|item| {
             item.ok().and_then(|(token_id, meta)| {
                 if meta.collection_group_id.as_ref() == Some(&group_id) {
@@ -489,6 +574,7 @@ pub fn query_tokens_by_group(
     to_json_binary(&TokensByGroupResponse { tokens })
 }
 
+#[cfg(feature = "cosmwasm")]
 pub fn query_contract_info(deps: Deps) -> StdResult<Binary> {
     let config = crate::state::CONFIG.load(deps.storage)?;
     let total_supply = TOTAL_SUPPLY.load(deps.storage)?;
@@ -504,6 +590,7 @@ pub fn query_contract_info(deps: Deps) -> StdResult<Binary> {
     to_json_binary(&info)
 }
 
+#[cfg(feature = "cosmwasm")]
 pub fn query_all_recipes(
     deps: Deps,
     start_after: Option<NftKind>,
@@ -526,6 +613,7 @@ pub fn query_all_recipes(
     to_json_binary(&AllRecipesResponse { recipes })
 }
 
+#[cfg(feature = "cosmwasm")]
 pub fn query_synthesis_preview(
     deps: Deps,
     _inputs: Vec<u64>,
@@ -554,6 +642,7 @@ pub fn query_synthesis_preview(
     })
 }
 
+#[cfg(feature = "cosmwasm")]
 pub fn query_nft_contract(_deps: Deps) -> StdResult<Binary> {
     // 本地 CW721 模式，不依赖外部合约
     to_json_binary(&NftContractResponse {

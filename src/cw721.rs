@@ -324,7 +324,7 @@ pub fn query_nft_info(deps: Deps, token_id: u64) -> StdResult<Binary> {
     
     // 构建 token URI（基于基础 URI 和 token ID）
     let config = CONFIG.load(deps.storage)?;
-    let token_uri = config.base_uri.map(|base| format!("{}/{}", base, token_id));
+    let token_uri = config.base_uri.map(|base| alloc::format!("{}/{}", base, token_id));
     
     // 返回 NFT 信息响应
     to_json_binary(&NftInfoResponse::<NftMeta> {
@@ -410,15 +410,20 @@ pub fn query_is_approved_for_all(deps: Deps, env: Env, owner: String, operator: 
     // 返回操作员批准响应
     to_json_binary(&OperatorResponse {
         approval: if approved {
-            Approval {
+            Some(Approval {
                 spender: operator.to_string(),
-                expires: Cw721Expiration::Never {},
-            }
+                expires: expiration.map(|exp| {
+                    if let Some(height) = exp.at_height {
+                        Cw721Expiration::AtHeight(height)
+                    } else if let Some(time) = exp.at_time {
+                        Cw721Expiration::AtTime(cosmwasm_std::Timestamp::from_seconds(time))
+                    } else {
+                        Cw721Expiration::Never {}
+                    }
+                }).unwrap_or(Cw721Expiration::Never {}),
+            })
         } else {
-            Approval {
-                spender: operator.to_string(),
-                expires: Cw721Expiration::Never {},
-            }
+            None
         },
     })
 }
@@ -440,7 +445,7 @@ pub fn query_token_uri(deps: Deps, token_id: u64) -> StdResult<Binary> {
     
     // 构建 token URI
     let config = CONFIG.load(deps.storage)?;
-    let token_uri = config.base_uri.map(|base| format!("{}/{}", base, token_id));
+    let token_uri = config.base_uri.map(|base| alloc::format!("{}/{}", base, token_id));
     
     to_json_binary(&NftInfoResponse::<NftMeta> {
         token_uri,
@@ -462,19 +467,13 @@ pub fn query_token_uri(deps: Deps, token_id: u64) -> StdResult<Binary> {
 /// - `StdResult<Binary>`: NFT ID 列表
 pub fn query_all_tokens(deps: Deps, _env: Env, start_after: Option<u64>, limit: Option<u32>) -> StdResult<Binary> {
     let limit = limit.unwrap_or(30).min(30) as usize;
-    let start = start_after.unwrap_or(0);
-
+    
+    // 使用Bound实现标准分页逻辑
+    let start_bound = start_after.map(|id| Bound::exclusive(id));
+    
     // 获取所有 NFT ID，支持分页
     let tokens: Vec<u64> = ALL_TOKENS
-        .keys(deps.storage, None, None, Order::Ascending)
-        .skip_while(|token_id| {
-            if let Ok(id) = token_id {
-                *id <= start
-            } else {
-                false
-            }
-        })
-        .skip(if start_after.is_some() { 1 } else { 0 })
+        .keys(deps.storage, start_bound, None, Order::Ascending)
         .take(limit)
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -500,21 +499,22 @@ pub fn query_tokens(deps: Deps, _env: Env, owner: String, start_after: Option<u6
     let owner_addr = deps.api.addr_validate(&owner)?;
     let limit = limit.unwrap_or(30).min(30) as usize;
     
-    // 获取用户拥有的 NFT 列表，支持分页
-    let tokens: Vec<u64> = TOKENS_BY_OWNER
+    // 获取用户拥有的 NFT 列表
+    let all_tokens = TOKENS_BY_OWNER
         .may_load(deps.storage, owner_addr)?
-        .unwrap_or_default()
-        .into_iter()
-        .skip_while(|token_id| {
-            if let Some(start) = start_after {
-                *token_id <= start
-            } else {
-                false
-            }
-        })
-        .skip(if start_after.is_some() { 1 } else { 0 })
-        .take(limit)
-        .collect();
+        .unwrap_or_default();
+    
+    // 使用标准分页逻辑
+    let tokens: Vec<u64> = if let Some(start) = start_after {
+        all_tokens.into_iter()
+            .filter(|&token_id| token_id > start)
+            .take(limit)
+            .collect()
+    } else {
+        all_tokens.into_iter()
+            .take(limit)
+            .collect()
+    };
 
     to_json_binary(&TokensResponse { 
         tokens: tokens.into_iter().map(|id| id.to_string()).collect() 

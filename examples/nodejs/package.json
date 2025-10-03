@@ -1,0 +1,36 @@
+{
+  "name": "luckee-nft-examples",
+  "version": "1.0.0",
+  "description": "Luckee NFT 合约 Node.js 集成示例",
+  "main": "luckee-nft-client.js",
+  "type": "module",
+  "scripts": {
+    "start": "node luckee-nft-client.js",
+    "test": "node test-examples.js",
+    "lint": "eslint *.js"
+  },
+  "dependencies": {
+    "@cosmjs/cosmwasm-stargate": "^0.32.0",
+    "@cosmjs/proto-signing": "^0.32.0",
+    "@cosmjs/stargate": "^0.32.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.0.0"
+  },
+  "keywords": [
+    "cosmwasm",
+    "nft",
+    "luckee",
+    "blockchain",
+    "cosmos"
+  ],
+  "author": "Luckee DAO",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/luckee-dao/luckee_nft.git"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
